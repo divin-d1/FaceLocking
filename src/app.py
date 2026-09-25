@@ -189,7 +189,23 @@ def main():
                 elif action == "Cancel":
                     state.update(enrolling=False, name="", samples=[], crops=[], auto=False, message="Enrollment cancelled")
                 elif action == "Lock":
-                    state["lock_requested"] = True
+                    if identity_lock.active:
+                        identity_lock.unlock()
+                        state["message"] = "Identity unlocked"
+                    else:
+                        selected = next((r for r in latest["records"]
+                                         if r["track_id"] == state["selected"]), None)
+                        recognized = [r for r in latest["records"] if r["name"]]
+                        if (selected is None or not selected["name"]) and len(recognized) == 1:
+                            selected = recognized[0]
+                            state["selected"] = selected["track_id"]
+                        if selected and selected["name"]:
+                            identity_lock.lock(selected["track_id"], selected["name"])
+                            state["message"] = f"LOCKED: {selected['name']} (track {selected['track_id']})"
+                        elif len(recognized) > 1:
+                            state["message"] = "Click the recognized face you want, then press Lock"
+                        else:
+                            state["message"] = "Cannot lock: wait for an enrolled name, not Unknown"
                 elif action == "Reload":
                     state["reload_requested"] = True
                 elif action == "Quit":
@@ -202,7 +218,7 @@ def main():
             x1, y1, x2, y2 = record["box"]
             if x1 <= raw_x <= x2 and y1 <= raw_y <= y2:
                 state["selected"] = record["track_id"]
-                state["message"] = f"Selected track {record['track_id']}"
+                state["message"] = f"Selected {record['name'] or 'Unknown'} (track {record['track_id']})"
                 return
 
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
@@ -335,15 +351,6 @@ def main():
                 state["message"] = f"Auto captured sample {len(state['samples'])} (5 minimum; press Save when ready)"
             elif state["auto"] and state["enrolling"] and selected_record is None:
                 state["message"] = f"Auto Capture waiting for a face | samples: {len(state['samples'])}"
-            if state.pop("lock_requested", False):
-                if identity_lock.active:
-                    identity_lock.unlock()
-                    state["message"] = "Identity unlocked"
-                elif selected_record and selected_record["name"]:
-                    identity_lock.lock(selected_record["track_id"], selected_record["name"])
-                    state["message"] = f"Locked to {selected_record['name']} (track {selected_record['track_id']})"
-                else:
-                    state["message"] = "Select a recognized face to lock"
             if state.pop("save_requested", False):
                 name = re.sub(r"[^\w .'-]", "", state["name"]).strip()
                 if not state["enrolling"] or not name:
@@ -395,8 +402,8 @@ def main():
             cv2.putText(vis, f"External camera: {args.camera}  |  Faces: {len(records)}  |  {state['message']}",
                         (16, 54), cv2.FONT_HERSHEY_SIMPLEX, .48, (190, 205, 220), 1)
             if state["missing_since"] is not None and now - state["missing_since"] >= .5:
-                warning = ("WARNING: LOCKED FACE MISSING" if locked_record is None else
-                           "WARNING: LOCKED IDENTITY MISMATCH") if identity_lock.active else "WARNING: NO FACE DETECTED"
+                warning = (f"SEARCHING FOR LOCKED PERSON: {identity_lock.name}" if locked_record is None else
+                           f"LOCKED PERSON NOT CONFIRMED: {identity_lock.name}") if identity_lock.active else "WARNING: NO FACE DETECTED"
                 banner_color = (0, 90, 230) if identity_lock.active else (0, 125, 255)
                 banner_w = min(width - 40, max(360, len(warning) * 18))
                 left = max(20, (width - banner_w) // 2)
